@@ -1,4 +1,3 @@
-// src/server.ts
 import express from 'express';
 import cors from 'cors';
 import { clientRouter } from '../src/routes/routes.js';
@@ -16,6 +15,7 @@ app.get('/', (req, res) => {
 });
 
 app.use("/api", clientRouter);
+app
 
 app.listen(PORT, () => {
   console.log(`Servidor rodando em http://localhost:${PORT}`);
