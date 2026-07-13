@@ -44,6 +44,7 @@ export class PaymentService {
             amount: amountInCents,
             expiresIn,
             description,
+            externalId,
             customer: {
               name: client.name,
               email: client.email ?? undefined,

@@ -30,3 +30,6 @@ Thumbs.db
 dist/
 build/
 out/
+
+# Documentação local de endpoints
+docs/
