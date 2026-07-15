@@ -105,54 +105,137 @@ export class PaymentService {
     return this.paymentModel.getAll();
   }
 
-  async simulatePixPayment(identifier: string): Promise<{provider: AbacatePayPixResponse;payment: PaymentResponse;}> {
+  async getAllByMethod(method: "PIX" | "BOLETO"): Promise<PaymentResponse[]> {
+    return this.paymentModel.getByMethod(method);
+  }
+
+  async checkStatus(identifier: string): Promise<{ provider: AbacatePayPixResponse; payment: PaymentResponse }> {
     const payment = await this.findPayment(identifier);
+    if (!payment) throw new Error("Pagamento não encontrado.");
+    try {
+      const response = await abacatePayClient.get<AbacatePayPixResponse>("/transparents/check", {
+        params: { id: payment.provider_payment_id }
+      });
+      const providerPayment = response.data.data;
+      if (!providerPayment) throw new Error(response.data.error ?? "Status não retornado pela AbacatePay.");
+      const updated = await this.paymentModel.updateStatus(payment.provider_payment_id, providerPayment.status, providerPayment.receiptUrl ?? null);
+      if (!updated) throw new Error("O status foi consultado, mas não pôde ser salvo.");
+      return { provider: response.data, payment: updated };
+    } catch (error: unknown) {
+      throw this.toProviderError(error, "Não foi possível consultar o status do pagamento.");
+    }
+  }
+
+  async refund(identifier: string, reason?: string): Promise<{ provider: unknown; payment: PaymentResponse }> {
+    const payment = await this.findPayment(identifier);
+    if (!payment) throw new Error("Pagamento não encontrado.");
+    if (payment.method === "BOLETO") throw new Error("A AbacatePay não oferece reembolso de boleto pela API.");
+    if (reason !== undefined && (typeof reason !== "string" || reason.trim().length > 255))
+      throw new Error("O motivo do reembolso deve possuir no máximo 255 caracteres.");
+    try {
+      const response = await abacatePayClient.post("/transparents/refund", {
+        id: payment.provider_payment_id,
+        ...(reason?.trim() ? { reason: reason.trim() } : {})
+      });
+      const updated = await this.paymentModel.updateStatus(payment.provider_payment_id, "REFUNDED");
+      if (!updated) throw new Error("O pagamento foi reembolsado, mas o banco não pôde ser atualizado.");
+      return { provider: response.data, payment: updated };
+    } catch (error: unknown) {
+      throw this.toProviderError(error, "Não foi possível reembolsar o pagamento.");
+    }
+  }
+
+  async simulatePixPayment(
+    identifier: string
+  ): Promise<{
+    simulation: AbacatePayPixResponse;
+    statusCheck: AbacatePayPixResponse;
+    payment: PaymentResponse;
+  }> {
+    const payment = await this.findPayment(identifier);
+
     if (!payment) {
       throw new Error("Pagamento não encontrado.");
     }
+
     if (payment.method !== "PIX") {
       throw new Error("A simulação está disponível apenas para PIX.");
     }
+
     if (payment.status === "PAID") {
       throw new Error("Este pagamento já está marcado como pago.");
     }
-    if (!payment.provider_payment_id?.startsWith("pix_char_")) {
+
+    const providerPaymentId = payment.provider_payment_id?.trim();
+
+    if (!providerPaymentId?.startsWith("pix_char_")) {
       throw new Error("O ID da AbacatePay salvo no pagamento é inválido.");
     }
+
     try {
-        const response = await abacatePayClient.post<AbacatePayPixResponse>("/transparents/simulate-payment",{
+      const simulationResponse =
+        await abacatePayClient.post<AbacatePayPixResponse>(
+          "/transparents/simulate-payment",
+          {
             metadata: {
-             externalId: payment.external_id,
-             paymentId: payment.id
-            }},
-            {
-                params: {
-                 id: payment.provider_payment_id
-                }
+              externalId: payment.external_id,
+              paymentId: payment.id
             }
-        );
-        const simulatedPayment = response.data.data;
-        if (!simulatedPayment) {
-         throw new Error(response.data.error ?? "A AbacatePay não retornou os dados do pagamento simulado.");
-        }
-        const updatedPayment = await this.paymentModel.updateStatus(
-         payment.provider_payment_id,
-         simulatedPayment.status,
-         simulatedPayment.receiptUrl ?? null
+          },
+          {
+            params: {
+              id: providerPaymentId
+            }
+          }
         );
 
-        if(!updatedPayment){
-         throw new Error("O pagamento foi simulado, mas o banco não foi atualizado.");
-        }
- 
-        return {
-         provider: response.data,
-         payment: updatedPayment
-        };
+      if (!simulationResponse.data.success || !simulationResponse.data.data) {
+        throw new Error(
+          simulationResponse.data.error ??
+            "A AbacatePay não confirmou a simulação do pagamento."
+        );
+      }
+
+      const statusResponse =
+        await abacatePayClient.get<AbacatePayPixResponse>(
+          "/transparents/check",
+          {
+            params: {
+              id: providerPaymentId
+            }
+          }
+        );
+
+      const confirmedPayment = statusResponse.data.data;
+
+      if (!statusResponse.data.success || !confirmedPayment) {
+        throw new Error(
+          statusResponse.data.error ??
+            "A AbacatePay não retornou o status confirmado do pagamento."
+        );
+      }
+
+      const updatedPayment = await this.paymentModel.updateStatus(
+        providerPaymentId,
+        confirmedPayment.status,
+        confirmedPayment.receiptUrl ?? null
+      );
+
+      if (!updatedPayment) {
+        throw new Error(
+          "O status foi confirmado, mas o pagamento não pôde ser atualizado no banco."
+        );
+      }
+
+      return {
+        simulation: simulationResponse.data,
+        statusCheck: statusResponse.data,
+        payment: updatedPayment
+      };
     } catch (error: unknown) {
       throw this.toProviderError(
         error,
-        "Não foi possível simular o pagamento."
+        "Não foi possível simular o pagamento PIX."
       );
     }
   }
@@ -174,7 +257,7 @@ export class PaymentService {
       return this.paymentModel.findById(localId);
     }
 
-    if (normalizedIdentifier.startsWith("pix_char_")) {
+    if (normalizedIdentifier.startsWith("pix_char_") || normalizedIdentifier.startsWith("bole_")) {
       return this.paymentModel.findByProviderPaymentId(normalizedIdentifier);
     }
 

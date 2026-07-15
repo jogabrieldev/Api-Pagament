@@ -1,4 +1,3 @@
-// src/server.ts
 import express from 'express';
 import cors from 'cors';
 import { clientRouter } from '../src/routes/routes.js';
@@ -6,7 +5,11 @@ import { clientRouter } from '../src/routes/routes.js';
 import 'dotenv/config';
 
 const app = express();
-app.use(express.json());
+app.use(express.json({
+  verify: (req, _res, buffer) => {
+    (req as typeof req & { rawBody?: Buffer }).rawBody = Buffer.from(buffer);
+  }
+}));
 app.use(cors());
 
 const PORT= process.env.PORT || 3000;

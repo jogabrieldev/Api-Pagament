@@ -57,6 +57,24 @@ export class PaymentController {
       });
     }
   }
+
+  async getAllPix(_req: Request, res: Response): Promise<Response> {
+    try { return res.status(200).json(await this.paymentService.getAllByMethod("PIX")); }
+    catch (e: unknown) { return res.status(500).json({ error: e instanceof Error ? e.message : "Erro ao listar PIX." }); }
+  }
+
+  async checkStatus(req: Request, res: Response): Promise<Response> {
+    try { return res.status(200).json(await this.paymentService.checkStatus(String(req.params.id))); }
+    catch (e: unknown) { return res.status(400).json({ error: e instanceof Error ? e.message : "Erro ao consultar status." }); }
+  }
+
+  async refund(req: Request, res: Response): Promise<Response> {
+    try {
+      return res.status(200).json(await this.paymentService.refund(String(req.params.id), req.body?.reason));
+    } catch (e: unknown) {
+      return res.status(400).json({ error: e instanceof Error ? e.message : "Erro ao reembolsar pagamento." });
+    }
+  }
   
 
   async simulatePixPayment(req: Request,res: Response): Promise<Response> {
